@@ -10,7 +10,7 @@ export default function LoginForm() {
   const [err, setErr] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
-  async function submit(e: React.FormEvent) {
+  async function submit(e: React.SyntheticEvent<HTMLFormElement>) {
     e.preventDefault();
     if (submitting) return;
     setSubmitting(true);
@@ -34,7 +34,7 @@ export default function LoginForm() {
   return (
     <div className="admin">
       <div className="admin-bar">
-        <Logo size="md" />
+        <Logo size="md" href="/" />
       </div>
       <div className="login-wrap">
         <form className="login-card scale-in" onSubmit={submit}>

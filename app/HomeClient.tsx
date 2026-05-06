@@ -24,6 +24,7 @@ export default function HomeClient({ initialConfig }: Props) {
   const [stepIdx, setStepIdx] = useState(-1);
   const [flashOn, setFlashOn] = useState(false);
   const [mode, setMode] = useState<"torch" | "screen" | "—">("—");
+  const [loading, setLoading] = useState(false);
   const [toasts, setToasts] = useState<ToastData[]>([]);
 
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -114,29 +115,31 @@ export default function HomeClient({ initialConfig }: Props) {
 
   const start = useCallback(async () => {
     if (!timeline.length) return;
+    setLoading(true);
 
     let useTorch = false;
-    if (torchRef.current?.acquired) {
-      // Already acquired — use torch immediately
-      useTorch = true;
-    } else if (acquirePromiseRef.current) {
-      // Acquire still in progress (user tapped before it resolved) — wait
-      useTorch = await acquirePromiseRef.current;
-      if (!useTorch) {
-        addToast("Фонарик недоступен — включён экранный режим", "info");
-      }
-    } else if (torch.ok && !torchRef.current) {
-      // Acquire failed earlier — retry once on user gesture
-      const ctrl = new TorchController();
-      try {
-        await ctrl.acquire();
-        torchRef.current = ctrl;
+    try {
+      if (torchRef.current?.acquired) {
         useTorch = true;
-      } catch (err) {
-        useTorch = false;
-        const msg = err instanceof TorchError ? err.message : "Ошибка фонарика";
-        addToast(msg + " — включён экранный режим", "error");
+      } else if (acquirePromiseRef.current) {
+        useTorch = await acquirePromiseRef.current;
+        if (!useTorch) {
+          addToast("Фонарик недоступен — включён экранный режим", "info");
+        }
+      } else if (torch.ok && !torchRef.current) {
+        const ctrl = new TorchController();
+        try {
+          await ctrl.acquire();
+          torchRef.current = ctrl;
+          useTorch = true;
+        } catch (err) {
+          useTorch = false;
+          const msg = err instanceof TorchError ? err.message : "Ошибка фонарика";
+          addToast(msg + " — включён экранный режим", "error");
+        }
       }
+    } finally {
+      setLoading(false);
     }
 
     if (useTorch) {
@@ -198,7 +201,7 @@ export default function HomeClient({ initialConfig }: Props) {
   return (
     <div className="home" ref={homeRef}>
       <nav className="nav fade-in" style={{ animationDelay: "50ms" }}>
-        <Logo size="md" />
+        <Logo size="md" href="/" />
       </nav>
 
       <main className="hero stagger">
@@ -246,9 +249,10 @@ export default function HomeClient({ initialConfig }: Props) {
 
         <div className="hero-right">
           <button
-            className={`launch ${active ? "active" : ""}`}
+            className={`launch ${active ? "active" : ""} ${loading ? "loading" : ""}`}
             onClick={active ? stop : start}
-            aria-label={active ? "Остановить" : "Запустить"}
+            disabled={loading}
+            aria-label={active ? "Остановить" : loading ? "Подключение…" : "Запустить"}
           >
             {active ? (
               <>
@@ -257,6 +261,14 @@ export default function HomeClient({ initialConfig }: Props) {
                 </svg>
                 <span className="lbl">Остановить</span>
                 <span className="sub">{mode === "torch" ? "Фонарик активен" : "Экранный режим"}</span>
+              </>
+            ) : loading ? (
+              <>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" className="spin">
+                  <circle cx="12" cy="12" r="9" strokeDasharray="40" strokeDashoffset="15" strokeLinecap="round" />
+                </svg>
+                <span className="lbl">Подключение…</span>
+                <span className="sub">поиск камеры</span>
               </>
             ) : (
               <>

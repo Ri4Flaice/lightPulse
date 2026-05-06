@@ -236,7 +236,7 @@ export default function AdminConsole({ initialConfig }: Props) {
     <div className="admin">
       <div className="admin-bar fade-in">
         <div className="left">
-          <Logo size="md" />
+          <Logo size="md" href="/" />
           <span className="crumbs">
             <span>админка</span>
             <span>/</span>

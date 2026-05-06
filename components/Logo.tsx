@@ -1,10 +1,12 @@
-type Props = { size?: "sm" | "md" | "lg" | "xl"; showSub?: boolean };
+import Link from "next/link";
+
+type Props = { size?: "sm" | "md" | "lg" | "xl"; showSub?: boolean; href?: string };
 
 const SIZES = { sm: 12, md: 14, lg: 18, xl: 26 } as const;
 
-export default function Logo({ size = "md", showSub = false }: Props) {
+export default function Logo({ size = "md", showSub = false, href }: Props) {
   const fs = SIZES[size];
-  return (
+  const inner = (
     <div className="lp-logo" style={{ gap: fs * 0.7 }}>
       <span className="lp-mark" style={{ height: fs * 0.95, gap: fs * 0.22 }}>
         <span className="d" style={{ width: fs * 0.28, height: fs * 0.28 }} />
@@ -24,4 +26,13 @@ export default function Logo({ size = "md", showSub = false }: Props) {
       )}
     </div>
   );
+
+  if (href) {
+    return (
+      <Link href={href} style={{ textDecoration: "none" }}>
+        {inner}
+      </Link>
+    );
+  }
+  return inner;
 }

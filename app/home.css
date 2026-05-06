@@ -120,6 +120,17 @@
 }
 .launch.active::before, .launch.active::after { display: none; }
 
+.launch.loading {
+  opacity: 0.75;
+  cursor: wait;
+  pointer-events: none;
+  animation: none;
+}
+.launch.loading::before, .launch.loading::after { display: none; }
+
+@keyframes spin { to { transform: rotate(360deg); } }
+.spin { animation: spin 1s linear infinite; transform-origin: center; }
+
 .hero-left {
   width: 100%;
   display: flex; flex-direction: column; align-items: center;
