@@ -14,9 +14,6 @@ out/
 # keep the example for documentation
 !.env.local.example
 
-# ── runtime config (contains sensitive sequence / user data) ──
-config.json
-
 # ── OS / editors ──────────────────────────────────────────────
 .DS_Store
 Thumbs.db

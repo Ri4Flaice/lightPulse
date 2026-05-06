@@ -1,0 +1,9 @@
+{
+  "dotDuration": 500,
+  "dashDuration": 500,
+  "symbolPause": 300,
+  "wordPause": 500,
+  "sequence": "--- -.-",
+  "label": "OK",
+  "accent": "#a6ff3d"
+}
