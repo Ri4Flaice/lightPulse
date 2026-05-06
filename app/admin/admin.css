@@ -8,22 +8,28 @@
 
 .admin-bar {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 16px 24px;
+  flex-wrap: wrap; gap: 8px;
+  padding: 14px 24px;
   border-bottom: 1px solid var(--line);
   background: rgba(5, 5, 5, 0.85);
   backdrop-filter: blur(10px);
   position: sticky; top: 0; z-index: 20;
 }
-.admin-bar .left { display: flex; align-items: center; gap: 18px; }
+.admin-bar .left {
+  display: flex; align-items: center; gap: 14px;
+  min-width: 0; flex: 1;
+}
 .admin-bar .crumbs {
   font-family: var(--font-mono);
-  font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase;
+  font-size: 11px; letter-spacing: 0.10em; text-transform: uppercase;
   color: var(--ink-dim);
-  display: flex; align-items: center; gap: 8px;
-  padding-left: 14px; border-left: 1px solid var(--line-strong);
+  display: flex; align-items: center; gap: 6px;
+  padding-left: 12px; border-left: 1px solid var(--line-strong);
+  white-space: nowrap; overflow: hidden;
+  min-width: 0;
 }
 .admin-bar .crumbs .now { color: var(--ink); }
-.admin-bar .right { display: flex; align-items: center; gap: 12px; }
+.admin-bar .right { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
 
 .login-wrap {
   flex: 1;
@@ -82,12 +88,18 @@
 }
 .panel-head {
   display: flex; align-items: center; justify-content: space-between;
+  flex-wrap: wrap; gap: 6px;
   padding: 18px 22px;
   border-bottom: 1px solid var(--line);
 }
 .panel-head h3 {
   font-size: 13px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase;
   display: flex; align-items: center; gap: 10px;
+  flex-shrink: 0;
+}
+.panel-head .tag-mono {
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  max-width: 100%;
 }
 .panel-head .num {
   width: 22px; height: 22px; border-radius: 6px;
@@ -282,13 +294,20 @@
 
 @media (max-width: 540px) {
   .tim-grid { grid-template-columns: 1fr; }
-  .panel-body { padding: 18px; }
-  .panel-head { padding: 14px 18px; }
-  .admin-bar { padding: 12px 16px; }
+  .panel-body { padding: 16px; }
+  .panel-head { padding: 12px 16px; }
+  .admin-bar { padding: 10px 16px; }
   .admin-body { padding: 12px; gap: 12px; }
   .save-bar { margin: 12px; padding: 12px 14px; flex-direction: column; align-items: stretch; }
   .save-bar .actions { width: 100%; }
   .save-bar .actions .btn { flex: 1; }
+  /* Hide breadcrumb on very small screens to save space */
+  .admin-bar .crumbs { display: none; }
+}
+
+@media (max-width: 380px) {
+  .admin-bar { gap: 6px; }
+  .admin-bar .right .chip { display: none; }
 }
 
 .kv-json {
