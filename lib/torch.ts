@@ -11,8 +11,18 @@ export function detectTorchSupport(): TorchSupport {
   return { ok: true, reason: "Проверка фонарика…" };
 }
 
+// ── Types ──────────────────────────────────────────────────────────────────
+
 type TorchConstraints = MediaTrackConstraintSet & { torch?: boolean };
 type TorchCapabilities = MediaTrackCapabilities & { torch?: boolean };
+
+// ImageCapture.setOptions is non-standard but supported on some Android/Chrome
+interface ImageCaptureWithTorch extends ImageCapture {
+  setOptions?: (opts: Record<string, unknown>) => Promise<void>;
+}
+declare let ImageCapture: {
+  new (track: MediaStreamTrack): ImageCaptureWithTorch;
+} | undefined;
 
 export class TorchError extends Error {
   constructor(
@@ -25,17 +35,56 @@ export class TorchError extends Error {
   }
 }
 
-/** Try to turn torch ON via applyConstraints. Returns null on success, error string on fail. */
-async function tryTorchOn(track: MediaStreamTrack): Promise<string | null> {
+// ── Torch methods ──────────────────────────────────────────────────────────
+
+type TorchMethod = "applyConstraints" | "imageCapture";
+
+/**
+ * Try to turn torch ON using both available methods.
+ * Returns which method worked, or null if both failed.
+ */
+async function probeTorch(
+  track: MediaStreamTrack
+): Promise<{ method: TorchMethod; err: null } | { method: null; err: string }> {
+  // Method 1: standard applyConstraints (works on most Android Chrome)
   try {
     await track.applyConstraints({ advanced: [{ torch: true } as TorchConstraints] });
-    return null;
-  } catch (e) {
-    return e instanceof Error ? e.name + ": " + e.message : String(e);
+    return { method: "applyConstraints", err: null };
+  } catch (e1) {
+    const applyErr = e1 instanceof Error ? `${e1.name}: ${e1.message}` : String(e1);
+
+    // Method 2: ImageCapture.setOptions (fallback for Samsung S-series Android 14+)
+    if (typeof ImageCapture !== "undefined") {
+      try {
+        const ic = new ImageCapture(track);
+        await ic.setOptions?.({ torch: true });
+        return { method: "imageCapture", err: null };
+      } catch (e2) {
+        const icErr = e2 instanceof Error ? `${e2.name}: ${e2.message}` : String(e2);
+        return {
+          method: null,
+          err: `applyConstraints: ${applyErr}; ImageCapture: ${icErr}`,
+        };
+      }
+    }
+
+    return { method: null, err: `applyConstraints: ${applyErr}; ImageCapture: недоступен` };
   }
 }
 
-/** Get camera stream with given constraints, return null if fails. */
+async function turnOff(track: MediaStreamTrack, method: TorchMethod): Promise<void> {
+  if (method === "applyConstraints") {
+    await track.applyConstraints({ advanced: [{ torch: false } as TorchConstraints] }).catch(() => {});
+  } else {
+    if (typeof ImageCapture !== "undefined") {
+      try {
+        const ic = new ImageCapture(track);
+        await ic.setOptions?.({ torch: false });
+      } catch { /* noop */ }
+    }
+  }
+}
+
 async function getStream(constraints: MediaTrackConstraints): Promise<MediaStream | null> {
   try {
     return await navigator.mediaDevices.getUserMedia({ video: constraints, audio: false });
@@ -44,14 +93,17 @@ async function getStream(constraints: MediaTrackConstraints): Promise<MediaStrea
   }
 }
 
+// ── TorchController ────────────────────────────────────────────────────────
+
 export class TorchController {
   private stream: MediaStream | null = null;
   private track: MediaStreamTrack | null = null;
+  private method: TorchMethod = "applyConstraints";
 
   async acquire(): Promise<void> {
     if (this.stream) return;
 
-    // 1. Request camera permission first with ideal environment facing
+    // 1. Request camera with preferred facing
     let stream: MediaStream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({
@@ -66,7 +118,7 @@ export class TorchController {
       throw new TorchError("Не удалось открыть камеру: " + err.message, "UNKNOWN", err.name);
     }
 
-    // 2. Try this camera first
+    // 2. Try the default camera first
     const track = stream.getVideoTracks()[0];
     if (!track) {
       stream.getTracks().forEach((t) => t.stop());
@@ -75,18 +127,20 @@ export class TorchController {
 
     const caps = track.getCapabilities?.() as TorchCapabilities | undefined;
     const torchInCaps = caps?.torch;
-    const applyErr = await tryTorchOn(track);
 
-    // 3. If this camera works — turn it back off and save
-    if (applyErr === null) {
-      await track.applyConstraints({ advanced: [{ torch: false } as TorchConstraints] }).catch(() => {});
+    const probe = await probeTorch(track);
+    if (probe.method !== null) {
+      // Turn back off immediately — user hasn't pressed the button yet
+      await turnOff(track, probe.method);
       this.stream = stream;
       this.track = track;
+      this.method = probe.method;
       return;
     }
 
-    // 4. This camera failed — try other rear cameras (multi-camera phones)
+    // 3. Default camera failed — try all other cameras (multi-camera phones)
     stream.getTracks().forEach((t) => t.stop());
+    const firstErr = probe.err;
 
     let devices: MediaDeviceInfo[] = [];
     try {
@@ -99,26 +153,28 @@ export class TorchController {
       if (!s) continue;
       const t = s.getVideoTracks()[0];
       if (!t) { s.getTracks().forEach((x) => x.stop()); continue; }
-      const err2 = await tryTorchOn(t);
-      if (err2 === null) {
-        await t.applyConstraints({ advanced: [{ torch: false } as TorchConstraints] }).catch(() => {});
+
+      const p2 = await probeTorch(t);
+      if (p2.method !== null) {
+        await turnOff(t, p2.method);
         this.stream = s;
         this.track = t;
+        this.method = p2.method;
         return;
       }
       s.getTracks().forEach((x) => x.stop());
     }
 
-    // 5. No camera with working torch found — build diagnostic message
-    const camCount = cameras.length;
+    // 4. Nothing worked
     const debug = [
       `getCapabilities().torch=${torchInCaps ?? "undefined"}`,
-      `applyConstraints error: ${applyErr}`,
-      `cameras found: ${camCount}`,
+      `first camera: ${firstErr}`,
+      `cameras found: ${cameras.length}`,
+      `ImageCapture available: ${typeof ImageCapture !== "undefined"}`,
     ].join("; ");
 
     throw new TorchError(
-      `Фонарик не поддерживается (камер: ${camCount}, torch в API: ${torchInCaps ?? "нет"})`,
+      `Фонарик не поддерживается (камер: ${cameras.length}, torch в API: ${torchInCaps ?? "нет"})`,
       "NOT_SUPPORTED",
       debug
     );
@@ -126,20 +182,25 @@ export class TorchController {
 
   async setOn(on: boolean): Promise<void> {
     if (!this.track) return;
-    try {
-      await this.track.applyConstraints({
-        advanced: [{ torch: on } as TorchConstraints],
-      });
-    } catch {
-      // Ignore rapid-toggling errors on some devices
+    if (this.method === "imageCapture") {
+      if (typeof ImageCapture !== "undefined") {
+        try {
+          const ic = new ImageCapture(this.track);
+          await ic.setOptions?.({ torch: on });
+        } catch { /* ignore rapid-toggling errors */ }
+      }
+    } else {
+      try {
+        await this.track.applyConstraints({
+          advanced: [{ torch: on } as TorchConstraints],
+        });
+      } catch { /* ignore */ }
     }
   }
 
   release(): void {
     if (this.track) {
-      try {
-        this.track.applyConstraints({ advanced: [{ torch: false } as TorchConstraints] });
-      } catch { /* noop */ }
+      turnOff(this.track, this.method).catch(() => {});
     }
     this.stream?.getTracks().forEach((t) => t.stop());
     this.stream = null;
