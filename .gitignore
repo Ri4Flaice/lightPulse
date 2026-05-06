@@ -1,0 +1,34 @@
+# ── dependencies ──────────────────────────────────────────────
+node_modules/
+.pnp
+.pnp.js
+.yarn/install-state.gz
+
+# ── next.js build ─────────────────────────────────────────────
+.next/
+out/
+
+# ── environment variables ─────────────────────────────────────
+.env*
+
+# keep the example for documentation
+!.env.local.example
+
+# ── runtime config (contains sensitive sequence / user data) ──
+config.json
+
+# ── OS / editors ──────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/settings.json
+
+# ── logs ──────────────────────────────────────────────────────
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ── misc ──────────────────────────────────────────────────────
+*.tsbuildinfo
+next-env.d.ts
