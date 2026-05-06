@@ -4,11 +4,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Logo from "@/components/Logo";
 import MorseGlyphs from "@/components/MorseGlyphs";
 import MorseTimeline from "@/components/MorseTimeline";
+import ToastList, { type ToastData } from "@/components/Toast";
 import { morseToTimeline } from "@/lib/morse";
-import { detectTorchSupport, TorchController, type TorchSupport } from "@/lib/torch";
+import { detectTorchSupport, TorchController, TorchError, type TorchSupport } from "@/lib/torch";
 import type { Config } from "@/lib/config";
 
 type Props = { initialConfig: Config };
+
+let toastIdCounter = 0;
 
 export default function HomeClient({ initialConfig }: Props) {
   const cfg = initialConfig;
@@ -21,6 +24,7 @@ export default function HomeClient({ initialConfig }: Props) {
   const [stepIdx, setStepIdx] = useState(-1);
   const [flashOn, setFlashOn] = useState(false);
   const [mode, setMode] = useState<"torch" | "screen" | "—">("—");
+  const [toasts, setToasts] = useState<ToastData[]>([]);
 
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const torchRef = useRef<TorchController | null>(null);
@@ -32,6 +36,15 @@ export default function HomeClient({ initialConfig }: Props) {
     () => morseToTimeline(cfg.sequence, cfg),
     [cfg.sequence, cfg.dotDuration, cfg.dashDuration, cfg.symbolPause, cfg.wordPause]
   );
+
+  const addToast = useCallback((message: string, type: ToastData["type"]) => {
+    const id = ++toastIdCounter;
+    setToasts((prev) => [...prev, { id, message, type }]);
+  }, []);
+
+  const dismissToast = useCallback((id: number) => {
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  }, []);
 
   // Detect support + try to acquire torch immediately on mount
   useEffect(() => {
@@ -50,10 +63,14 @@ export default function HomeClient({ initialConfig }: Props) {
         setTorch({ ok: true, reason: "Фонарик готов", acquired: true });
         return true;
       })
-      .catch((): boolean => {
+      .catch((err): boolean => {
         if (cancelled) return false;
-        setTorch({ ok: false, reason: "Доступ к фонарику отклонён", denied: true });
+        const isTorchErr = err instanceof TorchError;
+        const msg = isTorchErr ? err.message : "Ошибка доступа к камере";
+        const denied = isTorchErr && err.code === "PERMISSION_DENIED";
+        setTorch({ ok: false, reason: msg, denied });
         torchRef.current = null;
+        addToast(msg + " — включён экранный режим", denied ? "info" : "error");
         return false;
       });
 
@@ -63,6 +80,7 @@ export default function HomeClient({ initialConfig }: Props) {
       ctrl.release();
       torchRef.current = null;
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Apply accent
@@ -97,8 +115,11 @@ export default function HomeClient({ initialConfig }: Props) {
       // Already acquired — use torch immediately
       useTorch = true;
     } else if (acquirePromiseRef.current) {
-      // Acquire is still in progress (user tapped before it resolved) — wait for it
+      // Acquire still in progress (user tapped before it resolved) — wait
       useTorch = await acquirePromiseRef.current;
+      if (!useTorch) {
+        addToast("Фонарик недоступен — включён экранный режим", "info");
+      }
     } else if (torch.ok && !torchRef.current) {
       // Acquire failed earlier — retry once on user gesture
       const ctrl = new TorchController();
@@ -106,10 +127,20 @@ export default function HomeClient({ initialConfig }: Props) {
         await ctrl.acquire();
         torchRef.current = ctrl;
         useTorch = true;
-      } catch {
+      } catch (err) {
         useTorch = false;
+        const msg = err instanceof TorchError ? err.message : "Ошибка фонарика";
+        addToast(msg + " — включён экранный режим", "error");
       }
     }
+
+    if (useTorch) {
+      addToast("Фонарик активен", "success");
+    } else if (mode === "—") {
+      // First launch, no prior mode — inform about screen mode
+      addToast("Экранный режим активен", "info");
+    }
+
     setMode(useTorch ? "torch" : "screen");
     setActive(true);
 
@@ -137,7 +168,7 @@ export default function HomeClient({ initialConfig }: Props) {
       }, step.dur);
     };
     tick();
-  }, [timeline, torch.ok]);
+  }, [timeline, torch.ok, mode, addToast]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -149,13 +180,15 @@ export default function HomeClient({ initialConfig }: Props) {
 
   const torchReady = torch.ok;
   const statusText =
-    torch.denied
-      ? "доступ отклонён · экранный режим"
-      : torchReady
-        ? "фонарик готов"
-        : torch.reason === "..."
-          ? "определение…"
-          : "экранный режим";
+    torch.reason === "..."
+      ? "определение…"
+      : torch.denied
+        ? "доступ отклонён · экранный режим"
+        : torchReady
+          ? "фонарик готов"
+          : torch.reason.startsWith("iOS") || torch.reason.startsWith("Десктоп")
+            ? "экранный режим"
+            : torch.reason;
 
   return (
     <div className="home" ref={homeRef}>
@@ -267,6 +300,8 @@ export default function HomeClient({ initialConfig }: Props) {
           </button>
         </div>
       )}
+
+      <ToastList toasts={toasts} onDismiss={dismissToast} />
     </div>
   );
 }
