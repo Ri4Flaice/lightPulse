@@ -68,9 +68,14 @@ export default function HomeClient({ initialConfig }: Props) {
         const isTorchErr = err instanceof TorchError;
         const msg = isTorchErr ? err.message : "Ошибка доступа к камере";
         const denied = isTorchErr && err.code === "PERMISSION_DENIED";
+        const debug = isTorchErr ? err.debug : undefined;
         setTorch({ ok: false, reason: msg, denied });
         torchRef.current = null;
-        addToast(msg + " — включён экранный режим", denied ? "info" : "error");
+        // Show diagnostic info in toast so user can report exact cause
+        const toastMsg = debug
+          ? `${msg} [${debug}] — экранный режим`
+          : `${msg} — экранный режим`;
+        addToast(toastMsg, denied ? "info" : "error");
         return false;
       });
 

@@ -1,11 +1,5 @@
 export type TorchSupport = { ok: boolean; reason: string };
 
-/**
- * Pre-flight check before requesting camera.
- * Deliberately permissive — actual torch capability is verified in TorchController.acquire()
- * via track.getCapabilities(). Removed ImageCapture and Android-only restrictions since
- * many non-Chrome Android browsers still support the torch constraint.
- */
 export function detectTorchSupport(): TorchSupport {
   if (typeof navigator === "undefined") return { ok: false, reason: "SSR" };
   if (!navigator.mediaDevices?.getUserMedia) return { ok: false, reason: "Нет доступа к камере" };
@@ -18,14 +12,35 @@ export function detectTorchSupport(): TorchSupport {
 }
 
 type TorchConstraints = MediaTrackConstraintSet & { torch?: boolean };
+type TorchCapabilities = MediaTrackCapabilities & { torch?: boolean };
 
 export class TorchError extends Error {
   constructor(
     message: string,
-    public readonly code: "PERMISSION_DENIED" | "NOT_SUPPORTED" | "UNKNOWN"
+    public readonly code: "PERMISSION_DENIED" | "NOT_SUPPORTED" | "UNKNOWN",
+    public readonly debug?: string
   ) {
     super(message);
     this.name = "TorchError";
+  }
+}
+
+/** Try to turn torch ON via applyConstraints. Returns null on success, error string on fail. */
+async function tryTorchOn(track: MediaStreamTrack): Promise<string | null> {
+  try {
+    await track.applyConstraints({ advanced: [{ torch: true } as TorchConstraints] });
+    return null;
+  } catch (e) {
+    return e instanceof Error ? e.name + ": " + e.message : String(e);
+  }
+}
+
+/** Get camera stream with given constraints, return null if fails. */
+async function getStream(constraints: MediaTrackConstraints): Promise<MediaStream | null> {
+  try {
+    return await navigator.mediaDevices.getUserMedia({ video: constraints, audio: false });
+  } catch {
+    return null;
   }
 }
 
@@ -36,6 +51,7 @@ export class TorchController {
   async acquire(): Promise<void> {
     if (this.stream) return;
 
+    // 1. Request camera permission first with ideal environment facing
     let stream: MediaStream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({
@@ -47,35 +63,63 @@ export class TorchController {
       if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
         throw new TorchError("Доступ к камере отклонён", "PERMISSION_DENIED");
       }
-      throw new TorchError("Не удалось открыть камеру: " + err.message, "UNKNOWN");
+      throw new TorchError("Не удалось открыть камеру: " + err.message, "UNKNOWN", err.name);
     }
 
+    // 2. Try this camera first
     const track = stream.getVideoTracks()[0];
     if (!track) {
       stream.getTracks().forEach((t) => t.stop());
       throw new TorchError("Видеотрек недоступен", "UNKNOWN");
     }
 
-    // Check real torch capability via getCapabilities()
-    const capabilities = track.getCapabilities?.() as (MediaTrackCapabilities & { torch?: boolean }) | undefined;
-    if (capabilities && capabilities.torch === false) {
-      stream.getTracks().forEach((t) => t.stop());
-      throw new TorchError("Фонарик не поддерживается на этом устройстве", "NOT_SUPPORTED");
+    const caps = track.getCapabilities?.() as TorchCapabilities | undefined;
+    const torchInCaps = caps?.torch;
+    const applyErr = await tryTorchOn(track);
+
+    // 3. If this camera works — done
+    if (applyErr === null) {
+      this.stream = stream;
+      this.track = track;
+      return;
     }
 
-    // Verify torch actually works with a test applyConstraints
-    if (capabilities?.torch !== true) {
-      // Capabilities might not have torch listed — try anyway
-      try {
-        await track.applyConstraints({ advanced: [{ torch: false } as TorchConstraints] });
-      } catch {
-        stream.getTracks().forEach((t) => t.stop());
-        throw new TorchError("Фонарик не поддерживается на этом устройстве", "NOT_SUPPORTED");
+    // 4. This camera failed — try other rear cameras (multi-camera phones)
+    stream.getTracks().forEach((t) => t.stop());
+
+    let devices: MediaDeviceInfo[] = [];
+    try {
+      devices = await navigator.mediaDevices.enumerateDevices();
+    } catch { /* ignore */ }
+
+    const cameras = devices.filter((d) => d.kind === "videoinput");
+    for (const cam of cameras) {
+      const s = await getStream({ deviceId: { exact: cam.deviceId } });
+      if (!s) continue;
+      const t = s.getVideoTracks()[0];
+      if (!t) { s.getTracks().forEach((x) => x.stop()); continue; }
+      const err2 = await tryTorchOn(t);
+      if (err2 === null) {
+        this.stream = s;
+        this.track = t;
+        return;
       }
+      s.getTracks().forEach((x) => x.stop());
     }
 
-    this.stream = stream;
-    this.track = track;
+    // 5. No camera with working torch found — build diagnostic message
+    const camCount = cameras.length;
+    const debug = [
+      `getCapabilities().torch=${torchInCaps ?? "undefined"}`,
+      `applyConstraints error: ${applyErr}`,
+      `cameras found: ${camCount}`,
+    ].join("; ");
+
+    throw new TorchError(
+      `Фонарик не поддерживается (камер: ${camCount}, torch в API: ${torchInCaps ?? "нет"})`,
+      "NOT_SUPPORTED",
+      debug
+    );
   }
 
   async setOn(on: boolean): Promise<void> {
@@ -93,9 +137,7 @@ export class TorchController {
     if (this.track) {
       try {
         this.track.applyConstraints({ advanced: [{ torch: false } as TorchConstraints] });
-      } catch {
-        /* noop */
-      }
+      } catch { /* noop */ }
     }
     this.stream?.getTracks().forEach((t) => t.stop());
     this.stream = null;
