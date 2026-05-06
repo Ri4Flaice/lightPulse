@@ -77,8 +77,9 @@ export class TorchController {
     const torchInCaps = caps?.torch;
     const applyErr = await tryTorchOn(track);
 
-    // 3. If this camera works — done
+    // 3. If this camera works — turn it back off and save
     if (applyErr === null) {
+      await track.applyConstraints({ advanced: [{ torch: false } as TorchConstraints] }).catch(() => {});
       this.stream = stream;
       this.track = track;
       return;
@@ -100,6 +101,7 @@ export class TorchController {
       if (!t) { s.getTracks().forEach((x) => x.stop()); continue; }
       const err2 = await tryTorchOn(t);
       if (err2 === null) {
+        await t.applyConstraints({ advanced: [{ torch: false } as TorchConstraints] }).catch(() => {});
         this.stream = s;
         this.track = t;
         return;
