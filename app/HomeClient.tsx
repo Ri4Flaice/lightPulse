@@ -24,6 +24,8 @@ export default function HomeClient({ initialConfig }: Props) {
 
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const torchRef = useRef<TorchController | null>(null);
+  // Resolves to true if torch was acquired, false if denied/failed
+  const acquirePromiseRef = useRef<Promise<boolean> | null>(null);
   const homeRef = useRef<HTMLDivElement | null>(null);
 
   const timeline = useMemo(
@@ -40,20 +42,24 @@ export default function HomeClient({ initialConfig }: Props) {
     const ctrl = new TorchController();
     torchRef.current = ctrl;
     let cancelled = false;
-    ctrl
+
+    acquirePromiseRef.current = ctrl
       .acquire()
-      .then(() => {
-        if (cancelled) return;
+      .then((): boolean => {
+        if (cancelled) return false;
         setTorch({ ok: true, reason: "Фонарик готов", acquired: true });
+        return true;
       })
-      .catch(() => {
-        if (cancelled) return;
+      .catch((): boolean => {
+        if (cancelled) return false;
         setTorch({ ok: false, reason: "Доступ к фонарику отклонён", denied: true });
         torchRef.current = null;
+        return false;
       });
 
     return () => {
       cancelled = true;
+      acquirePromiseRef.current = null;
       ctrl.release();
       torchRef.current = null;
     };
@@ -88,9 +94,13 @@ export default function HomeClient({ initialConfig }: Props) {
 
     let useTorch = false;
     if (torchRef.current?.acquired) {
+      // Already acquired — use torch immediately
       useTorch = true;
+    } else if (acquirePromiseRef.current) {
+      // Acquire is still in progress (user tapped before it resolved) — wait for it
+      useTorch = await acquirePromiseRef.current;
     } else if (torch.ok && !torchRef.current) {
-      // Re-attempt acquire on click (in case auto-acquire was blocked by browser)
+      // Acquire failed earlier — retry once on user gesture
       const ctrl = new TorchController();
       try {
         await ctrl.acquire();
