@@ -10,13 +10,18 @@ let cached: Redis | null | undefined;
 export function getRedis(): Redis | null {
   if (cached !== undefined) return cached;
 
+  const env = process.env;
   const url =
-    process.env.UPSTASH_REDIS_REST_URL ??
-    process.env.KV_REST_API_URL ??
+    env.UPSTASH_REDIS_REST_URL ??
+    env.KV_REST_API_URL ??
+    env.upstash_KV_REST_API_URL ??
+    env.upstash_REDIS_REST_URL ??
     "";
   const token =
-    process.env.UPSTASH_REDIS_REST_TOKEN ??
-    process.env.KV_REST_API_TOKEN ??
+    env.UPSTASH_REDIS_REST_TOKEN ??
+    env.KV_REST_API_TOKEN ??
+    env.upstash_KV_REST_API_TOKEN ??
+    env.upstash_REDIS_REST_TOKEN ??
     "";
 
   if (!url || !token) {
