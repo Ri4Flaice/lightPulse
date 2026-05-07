@@ -1,10 +1,8 @@
-import { promises as fs } from "node:fs";
-import path from "node:path";
+import { kv } from "@vercel/kv";
 import { z } from "zod";
 
-const LOG_DIR = path.join(process.cwd(), "data");
-const LOG_FILE = path.join(LOG_DIR, "torch-log.jsonl");
-const MAX_LINES = 1000;
+const LIST_KEY = "torch:log";
+const MAX_ENTRIES = 1000;
 export const MAX_RECORD_BYTES = 8 * 1024;
 
 const MethodResultSchema = z.object({
@@ -51,7 +49,9 @@ export const TorchDiagnosticsSchema = z.object({
   durationMs: z.number().int().nonnegative().max(60_000),
 });
 
-export type TorchLogEntry = z.infer<typeof TorchDiagnosticsSchema> & {
+export type TorchDiagnostics = z.infer<typeof TorchDiagnosticsSchema>;
+
+export type TorchLogEntry = TorchDiagnostics & {
   serverTs: string;
   ipHash: string;
 };
@@ -61,68 +61,53 @@ const ServerEntrySchema = TorchDiagnosticsSchema.extend({
   ipHash: z.string(),
 });
 
-async function ensureDir(): Promise<void> {
-  await fs.mkdir(LOG_DIR, { recursive: true });
+function isKvConfigured(): boolean {
+  return !!(process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN);
+}
+
+export function kvStatus(): { configured: boolean } {
+  return { configured: isKvConfigured() };
 }
 
 export async function appendTorchLog(entry: TorchLogEntry): Promise<void> {
-  await ensureDir();
-  const line = JSON.stringify(entry) + "\n";
-  await fs.appendFile(LOG_FILE, line, "utf8");
-
-  // Lazy rotation: every ~50 writes, check size and trim
-  if (Math.random() < 0.02) {
-    await rotateIfNeeded();
+  if (!isKvConfigured()) {
+    // No-op locally without Vercel KV configured. Logs simply won't persist.
+    return;
   }
-}
-
-async function rotateIfNeeded(): Promise<void> {
-  try {
-    const raw = await fs.readFile(LOG_FILE, "utf8");
-    const lines = raw.split("\n").filter(Boolean);
-    if (lines.length > MAX_LINES) {
-      const trimmed = lines.slice(-MAX_LINES).join("\n") + "\n";
-      const tmp = LOG_FILE + ".tmp";
-      await fs.writeFile(tmp, trimmed, "utf8");
-      await fs.rename(tmp, LOG_FILE);
-    }
-  } catch {
-    /* ignore */
-  }
+  // LPUSH puts newest at index 0; LTRIM keeps the first N (= newest N).
+  await kv.lpush(LIST_KEY, JSON.stringify(entry));
+  await kv.ltrim(LIST_KEY, 0, MAX_ENTRIES - 1);
 }
 
 export async function readTorchLog(limit = 200): Promise<TorchLogEntry[]> {
-  try {
-    const raw = await fs.readFile(LOG_FILE, "utf8");
-    const lines = raw.split("\n").filter(Boolean);
-    const tail = lines.slice(-limit);
-    const out: TorchLogEntry[] = [];
-    for (const line of tail) {
-      try {
-        const parsed = ServerEntrySchema.safeParse(JSON.parse(line));
-        if (parsed.success) out.push(parsed.data);
-      } catch {
-        /* skip malformed line */
-      }
+  if (!isKvConfigured()) return [];
+  const cap = Math.min(Math.max(limit, 1), MAX_ENTRIES);
+  // Newest-first because LPUSH inserts at head.
+  const items = (await kv.lrange(LIST_KEY, 0, cap - 1)) as unknown[];
+  const out: TorchLogEntry[] = [];
+  for (const item of items) {
+    try {
+      const obj = typeof item === "string" ? JSON.parse(item) : item;
+      const parsed = ServerEntrySchema.safeParse(obj);
+      if (parsed.success) out.push(parsed.data);
+    } catch {
+      /* skip malformed entry */
     }
-    return out.reverse(); // newest first
-  } catch {
-    return [];
   }
+  return out;
 }
 
 export async function readTorchLogRaw(): Promise<string> {
-  try {
-    return await fs.readFile(LOG_FILE, "utf8");
-  } catch {
-    return "";
-  }
+  const entries = await readTorchLog(MAX_ENTRIES);
+  // Output as JSONL, oldest-first (more natural for log files).
+  return entries
+    .slice()
+    .reverse()
+    .map((e) => JSON.stringify(e))
+    .join("\n");
 }
 
 export async function clearTorchLog(): Promise<void> {
-  try {
-    await fs.writeFile(LOG_FILE, "", "utf8");
-  } catch {
-    /* ignore */
-  }
+  if (!isKvConfigured()) return;
+  await kv.del(LIST_KEY);
 }
