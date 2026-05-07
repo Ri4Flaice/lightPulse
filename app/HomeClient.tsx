@@ -7,6 +7,7 @@ import MorseTimeline from "@/components/MorseTimeline";
 import ToastList, { type ToastData } from "@/components/Toast";
 import { morseToTimeline } from "@/lib/morse";
 import { detectTorchSupport, TorchController, TorchError, type TorchSupport } from "@/lib/torch";
+import { sendTorchLog } from "@/lib/torchLogClient";
 import type { Config } from "@/lib/config";
 
 type Props = { initialConfig: Config };
@@ -62,21 +63,21 @@ export default function HomeClient({ initialConfig }: Props) {
       .then((): boolean => {
         if (cancelled) return false;
         setTorch({ ok: true, reason: "Фонарик готов", acquired: true });
+        sendTorchLog(ctrl.diagnostics).catch(() => {});
         return true;
       })
       .catch((err): boolean => {
         if (cancelled) return false;
         const isTorchErr = err instanceof TorchError;
-        const msg = isTorchErr ? err.message : "Ошибка доступа к камере";
         const denied = isTorchErr && err.code === "PERMISSION_DENIED";
-        const debug = isTorchErr ? err.debug : undefined;
-        setTorch({ ok: false, reason: msg, denied });
+        const reason = denied ? "Доступ отклонён · экранный режим" : "Экранный режим";
+        setTorch({ ok: false, reason, denied });
         torchRef.current = null;
-        // Show diagnostic info in toast so user can report exact cause
-        const toastMsg = debug
-          ? `${msg} [${debug}] — экранный режим`
-          : `${msg} — экранный режим`;
+        const toastMsg = denied
+          ? "Доступ к камере отклонён — экранный режим"
+          : "Фонарик недоступен — экранный режим";
         addToast(toastMsg, denied ? "info" : "error");
+        if (isTorchErr) sendTorchLog(err.diagnostics).catch(() => {});
         return false;
       });
 
@@ -132,10 +133,11 @@ export default function HomeClient({ initialConfig }: Props) {
           await ctrl.acquire();
           torchRef.current = ctrl;
           useTorch = true;
+          sendTorchLog(ctrl.diagnostics).catch(() => {});
         } catch (err) {
           useTorch = false;
-          const msg = err instanceof TorchError ? err.message : "Ошибка фонарика";
-          addToast(msg + " — включён экранный режим", "error");
+          addToast("Фонарик недоступен — экранный режим", "error");
+          if (err instanceof TorchError) sendTorchLog(err.diagnostics).catch(() => {});
         }
       }
     } finally {
