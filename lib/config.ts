@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { kv } from "@vercel/kv";
 import { z } from "zod";
+import { getRedis, isRedisConfigured } from "./redis";
 
 export const ConfigSchema = z.object({
   dotDuration: z.number().int().min(50).max(600),
@@ -32,13 +32,11 @@ export const DEFAULT_CONFIG: Config = {
 const CONFIG_FILE = path.join(process.cwd(), "config.json");
 const KV_KEY = "lp:config";
 
-function isKvConfigured(): boolean {
-  return !!(process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN);
-}
-
 async function readFromKv(): Promise<Config | null> {
+  const redis = getRedis();
+  if (!redis) return null;
   try {
-    const raw = await kv.get<unknown>(KV_KEY);
+    const raw = await redis.get<unknown>(KV_KEY);
     if (raw == null) return null;
     const obj = typeof raw === "string" ? JSON.parse(raw) : raw;
     const parsed = ConfigSchema.safeParse(obj);
@@ -59,14 +57,14 @@ async function readFromFile(): Promise<Config | null> {
 }
 
 export async function readConfig(): Promise<Config> {
-  if (isKvConfigured()) {
+  const redis = getRedis();
+  if (redis) {
     const fromKv = await readFromKv();
     if (fromKv) return fromKv;
-    // Bootstrap KV from bundled config.json on first read.
     const fromFile = await readFromFile();
     if (fromFile) {
       try {
-        await kv.set(KV_KEY, JSON.stringify(fromFile));
+        await redis.set(KV_KEY, JSON.stringify(fromFile));
       } catch {
         /* ignore */
       }
@@ -80,14 +78,23 @@ export async function readConfig(): Promise<Config> {
 export async function writeConfig(cfg: unknown): Promise<Config> {
   const validated = ConfigSchema.parse(cfg);
 
-  if (isKvConfigured()) {
-    await kv.set(KV_KEY, JSON.stringify(validated));
+  const redis = getRedis();
+  if (redis) {
+    await redis.set(KV_KEY, JSON.stringify(validated));
     return validated;
   }
 
-  // Local dev: persist to file.
+  if (process.env.VERCEL) {
+    // No KV configured but running on Vercel — filesystem is read-only.
+    throw new Error(
+      "Хранилище не настроено: нет KV_REST_API_*/UPSTASH_REDIS_REST_* env-vars"
+    );
+  }
+
   const tmp = CONFIG_FILE + ".tmp";
   await fs.writeFile(tmp, JSON.stringify(validated, null, 2), "utf8");
   await fs.rename(tmp, CONFIG_FILE);
   return validated;
 }
+
+export { isRedisConfigured };

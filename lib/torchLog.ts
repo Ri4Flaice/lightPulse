@@ -1,5 +1,5 @@
-import { kv } from "@vercel/kv";
 import { z } from "zod";
+import { getRedis } from "./redis";
 
 const LIST_KEY = "torch:log";
 const MAX_ENTRIES = 1000;
@@ -61,29 +61,18 @@ const ServerEntrySchema = TorchDiagnosticsSchema.extend({
   ipHash: z.string(),
 });
 
-function isKvConfigured(): boolean {
-  return !!(process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN);
-}
-
-export function kvStatus(): { configured: boolean } {
-  return { configured: isKvConfigured() };
-}
-
 export async function appendTorchLog(entry: TorchLogEntry): Promise<void> {
-  if (!isKvConfigured()) {
-    // No-op locally without Vercel KV configured. Logs simply won't persist.
-    return;
-  }
-  // LPUSH puts newest at index 0; LTRIM keeps the first N (= newest N).
-  await kv.lpush(LIST_KEY, JSON.stringify(entry));
-  await kv.ltrim(LIST_KEY, 0, MAX_ENTRIES - 1);
+  const redis = getRedis();
+  if (!redis) return; // No-op locally without Redis configured.
+  await redis.lpush(LIST_KEY, JSON.stringify(entry));
+  await redis.ltrim(LIST_KEY, 0, MAX_ENTRIES - 1);
 }
 
 export async function readTorchLog(limit = 200): Promise<TorchLogEntry[]> {
-  if (!isKvConfigured()) return [];
+  const redis = getRedis();
+  if (!redis) return [];
   const cap = Math.min(Math.max(limit, 1), MAX_ENTRIES);
-  // Newest-first because LPUSH inserts at head.
-  const items = (await kv.lrange(LIST_KEY, 0, cap - 1)) as unknown[];
+  const items = (await redis.lrange(LIST_KEY, 0, cap - 1)) as unknown[];
   const out: TorchLogEntry[] = [];
   for (const item of items) {
     try {
@@ -99,7 +88,6 @@ export async function readTorchLog(limit = 200): Promise<TorchLogEntry[]> {
 
 export async function readTorchLogRaw(): Promise<string> {
   const entries = await readTorchLog(MAX_ENTRIES);
-  // Output as JSONL, oldest-first (more natural for log files).
   return entries
     .slice()
     .reverse()
@@ -108,6 +96,7 @@ export async function readTorchLogRaw(): Promise<string> {
 }
 
 export async function clearTorchLog(): Promise<void> {
-  if (!isKvConfigured()) return;
-  await kv.del(LIST_KEY);
+  const redis = getRedis();
+  if (!redis) return;
+  await redis.del(LIST_KEY);
 }

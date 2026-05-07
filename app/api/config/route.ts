@@ -30,6 +30,8 @@ export async function POST(req: Request) {
         { status: 400 }
       );
     }
-    return NextResponse.json({ error: "write failed" }, { status: 500 });
+    const msg = e instanceof Error ? e.message : "write failed";
+    console.error("[/api/config] write failed:", e);
+    return NextResponse.json({ error: msg }, { status: 500 });
   }
 }
