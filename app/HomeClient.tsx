@@ -180,6 +180,60 @@ export default function HomeClient({ initialConfig }: Props) {
     tick();
   }, [timeline, torch.ok, mode, addToast]);
 
+  // Refs to call latest start/stop from EventSource handlers without stale closures.
+  const startRef = useRef(start);
+  const stopRef = useRef(stop);
+  useEffect(() => {
+    startRef.current = start;
+    stopRef.current = stop;
+  }, [start, stop]);
+
+  // Track the active state so the SSE handler doesn't re-fire on duplicate events.
+  const activeRef = useRef(active);
+  useEffect(() => {
+    activeRef.current = active;
+  }, [active]);
+
+  // Subscribe to admin broadcast events.
+  useEffect(() => {
+    let lastVersion = -1;
+    let es: EventSource | null = null;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let cancelled = false;
+
+    const connect = () => {
+      if (cancelled) return;
+      es = new EventSource("/api/broadcast/stream");
+      es.onmessage = (ev) => {
+        try {
+          const data = JSON.parse(ev.data) as { playing: boolean; version: number };
+          if (typeof data.version !== "number" || data.version <= lastVersion) return;
+          lastVersion = data.version;
+          if (data.playing && !activeRef.current) {
+            startRef.current();
+          } else if (!data.playing && activeRef.current) {
+            stopRef.current();
+          }
+        } catch {
+          /* ignore */
+        }
+      };
+      es.onerror = () => {
+        es?.close();
+        es = null;
+        if (cancelled) return;
+        retryTimer = setTimeout(connect, 2000);
+      };
+    };
+    connect();
+
+    return () => {
+      cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
+      es?.close();
+    };
+  }, []);
+
   // Cleanup on unmount
   useEffect(() => {
     return () => {

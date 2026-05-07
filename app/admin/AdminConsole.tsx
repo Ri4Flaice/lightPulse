@@ -9,6 +9,7 @@ import MorseTimeline from "@/components/MorseTimeline";
 import { morseToTimeline, textToMorse, totalDuration } from "@/lib/morse";
 import type { Config } from "@/lib/config";
 import TorchLogPanel from "./TorchLogPanel";
+import BroadcastPanel from "./BroadcastPanel";
 
 const PRESETS = [
   { id: "sos", label: "SOS", text: "SOS", seq: "... --- ..." },
@@ -566,6 +567,7 @@ export default function AdminConsole({ initialConfig }: Props) {
           </div>
         </section>
 
+        <BroadcastPanel />
         <TorchLogPanel />
       </div>
 

@@ -1,6 +1,8 @@
 import { Redis } from "@upstash/redis";
+import IORedis, { Redis as IORedisClient } from "ioredis";
 
 let cached: Redis | null | undefined;
+let cachedTcpPub: IORedisClient | null | undefined;
 
 /**
  * Returns a Redis client if env-vars are configured, else null.
@@ -34,4 +36,44 @@ export function getRedis(): Redis | null {
 
 export function isRedisConfigured(): boolean {
   return getRedis() !== null;
+}
+
+function getTcpUrl(): string | null {
+  const env = process.env;
+  return (
+    env.REDIS_URL ??
+    env.upstash_REDIS_URL ??
+    env.UPSTASH_REDIS_URL ??
+    null
+  );
+}
+
+/** Long-lived publisher client (TCP) reused across requests when possible. */
+export function getRedisPublisher(): IORedisClient | null {
+  if (cachedTcpPub !== undefined) return cachedTcpPub;
+  const url = getTcpUrl();
+  if (!url) {
+    cachedTcpPub = null;
+    return null;
+  }
+  cachedTcpPub = new IORedis(url, {
+    maxRetriesPerRequest: 2,
+    lazyConnect: false,
+    enableReadyCheck: false,
+  });
+  cachedTcpPub.on("error", (err) => {
+    console.error("[redis pub] error:", err.message);
+  });
+  return cachedTcpPub;
+}
+
+/** Per-request subscriber client (TCP). Caller is responsible for quit(). */
+export function createRedisSubscriber(): IORedisClient | null {
+  const url = getTcpUrl();
+  if (!url) return null;
+  return new IORedis(url, {
+    maxRetriesPerRequest: 2,
+    lazyConnect: false,
+    enableReadyCheck: false,
+  });
 }
