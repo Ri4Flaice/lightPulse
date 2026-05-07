@@ -114,71 +114,88 @@ export default function HomeClient({ initialConfig }: Props) {
     torchRef.current?.setOn(false);
   }, []);
 
-  const start = useCallback(async () => {
-    if (!timeline.length) return;
-    setLoading(true);
+  // Server↔client time offset (serverTime ≈ clientTime + offset).
+  const serverOffsetRef = useRef(0);
 
-    let useTorch = false;
-    try {
-      if (torchRef.current?.acquired) {
-        useTorch = true;
-      } else if (acquirePromiseRef.current) {
-        useTorch = await acquirePromiseRef.current;
-        if (!useTorch) {
-          addToast("Фонарик недоступен — включён экранный режим", "info");
-        }
-      } else if (torch.ok && !torchRef.current) {
-        const ctrl = new TorchController();
-        try {
-          await ctrl.acquire();
-          torchRef.current = ctrl;
+  const start = useCallback(
+    async (serverStartAt?: number) => {
+      if (!timeline.length) return;
+      setLoading(true);
+
+      let useTorch = false;
+      try {
+        if (torchRef.current?.acquired) {
           useTorch = true;
-          sendTorchLog(ctrl.diagnostics).catch(() => {});
-        } catch (err) {
-          useTorch = false;
-          addToast("Фонарик недоступен — экранный режим", "error");
-          if (err instanceof TorchError) sendTorchLog(err.diagnostics).catch(() => {});
+        } else if (acquirePromiseRef.current) {
+          useTorch = await acquirePromiseRef.current;
+          if (!useTorch) {
+            addToast("Фонарик недоступен — включён экранный режим", "info");
+          }
+        } else if (torch.ok && !torchRef.current) {
+          const ctrl = new TorchController();
+          try {
+            await ctrl.acquire();
+            torchRef.current = ctrl;
+            useTorch = true;
+            sendTorchLog(ctrl.diagnostics).catch(() => {});
+          } catch (err) {
+            useTorch = false;
+            addToast("Фонарик недоступен — экранный режим", "error");
+            if (err instanceof TorchError) sendTorchLog(err.diagnostics).catch(() => {});
+          }
         }
+      } finally {
+        setLoading(false);
       }
-    } finally {
-      setLoading(false);
-    }
 
-    if (useTorch) {
-      addToast("Фонарик активен", "success");
-    } else if (mode === "—") {
-      // First launch, no prior mode — inform about screen mode
-      addToast("Экранный режим активен", "info");
-    }
-
-    setMode(useTorch ? "torch" : "screen");
-    setActive(true);
-
-    let i = 0;
-    let onIdx = -1;
-
-    const tick = () => {
-      if (i >= timeline.length) {
-        i = 0;
-        onIdx = -1;
+      if (useTorch) {
+        addToast("Фонарик активен", "success");
+      } else if (mode === "—") {
+        addToast("Экранный режим активен", "info");
       }
-      const step = timeline[i];
-      if (step.type === "on") {
-        onIdx++;
-        setStepIdx(onIdx);
-        setFlashOn(true);
-        if (useTorch) torchRef.current?.setOn(true);
-      } else {
-        setFlashOn(false);
-        if (useTorch) torchRef.current?.setOn(false);
-      }
-      timerRef.current = setTimeout(() => {
-        i++;
-        tick();
-      }, step.dur);
-    };
-    tick();
-  }, [timeline, torch.ok, mode, addToast]);
+
+      setMode(useTorch ? "torch" : "screen");
+      setActive(true);
+
+      // Convert server-time anchor to local-time anchor; if no anchor, start now.
+      const offset = serverOffsetRef.current;
+      const localAnchor =
+        typeof serverStartAt === "number" ? serverStartAt - offset : Date.now();
+
+      let i = 0;
+      let onIdx = -1;
+      // `nextAt` is the local-clock target for the *current* step's transition.
+      let nextAt = localAnchor;
+
+      const tick = () => {
+        if (i >= timeline.length) {
+          i = 0;
+          onIdx = -1;
+        }
+        const step = timeline[i];
+        if (step.type === "on") {
+          onIdx++;
+          setStepIdx(onIdx);
+          setFlashOn(true);
+          if (useTorch) torchRef.current?.setOn(true);
+        } else {
+          setFlashOn(false);
+          if (useTorch) torchRef.current?.setOn(false);
+        }
+        // Schedule next step at absolute time (corrects for setTimeout drift).
+        nextAt += step.dur;
+        const wait = Math.max(0, nextAt - Date.now());
+        timerRef.current = setTimeout(() => {
+          i++;
+          tick();
+        }, wait);
+      };
+
+      const initialWait = Math.max(0, localAnchor - Date.now());
+      timerRef.current = setTimeout(tick, initialWait);
+    },
+    [timeline, torch.ok, mode, addToast]
+  );
 
   // Refs to call latest start/stop from EventSource handlers without stale closures.
   const startRef = useRef(start);
@@ -194,6 +211,42 @@ export default function HomeClient({ initialConfig }: Props) {
     activeRef.current = active;
   }, [active]);
 
+  // NTP-style server clock sync. Repeated quick samples; keep the lowest-RTT result.
+  useEffect(() => {
+    let cancelled = false;
+    let bestRtt = Infinity;
+
+    const sample = async () => {
+      const t0 = Date.now();
+      try {
+        const res = await fetch("/api/time", { cache: "no-store" });
+        const t3 = Date.now();
+        const j = (await res.json()) as { now: number };
+        if (cancelled || typeof j.now !== "number") return;
+        const rtt = t3 - t0;
+        if (rtt < bestRtt) {
+          bestRtt = rtt;
+          // serverNow at (t0+t3)/2 ≈ j.now → offset such that serverTime = clientTime + offset
+          serverOffsetRef.current = j.now - (t0 + t3) / 2;
+        }
+      } catch {
+        /* ignore */
+      }
+    };
+
+    (async () => {
+      for (let i = 0; i < 4 && !cancelled; i++) {
+        await sample();
+        await new Promise((r) => setTimeout(r, 150));
+      }
+    })();
+    const id = setInterval(sample, 5 * 60_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, []);
+
   // Subscribe to admin broadcast events.
   useEffect(() => {
     let lastVersion = -1;
@@ -206,11 +259,15 @@ export default function HomeClient({ initialConfig }: Props) {
       es = new EventSource("/api/broadcast/stream");
       es.onmessage = (ev) => {
         try {
-          const data = JSON.parse(ev.data) as { playing: boolean; version: number };
+          const data = JSON.parse(ev.data) as {
+            playing: boolean;
+            version: number;
+            startAt?: number;
+          };
           if (typeof data.version !== "number" || data.version <= lastVersion) return;
           lastVersion = data.version;
           if (data.playing && !activeRef.current) {
-            startRef.current();
+            startRef.current(data.startAt);
           } else if (!data.playing && activeRef.current) {
             stopRef.current();
           }
@@ -306,7 +363,7 @@ export default function HomeClient({ initialConfig }: Props) {
         <div className="hero-right">
           <button
             className={`launch ${active ? "active" : ""} ${loading ? "loading" : ""}`}
-            onClick={active ? stop : start}
+            onClick={active ? stop : () => start()}
             disabled={loading}
             aria-label={active ? "Остановить" : loading ? "Подключение…" : "Запустить"}
           >

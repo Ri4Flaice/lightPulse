@@ -48,7 +48,7 @@ export default function BroadcastPanel() {
     <section className="panel">
       <header className="panel-head">
         <h3>
-          <span className="num">05</span> Световое шоу
+          <span className="num">04</span> Световое шоу
         </h3>
         <span className="tag-mono">
           {state ? `v${state.version}` : "—"} ·{" "}

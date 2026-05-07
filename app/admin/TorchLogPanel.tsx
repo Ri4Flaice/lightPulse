@@ -118,7 +118,7 @@ export default function TorchLogPanel() {
     <section className="panel">
       <header className="panel-head">
         <h3>
-          <span className="num">04</span> Журнал фонарика
+          <span className="num">05</span> Журнал фонарика
         </h3>
         <span className="tag-mono">{entries ? `${entries.length} записей` : "—"}</span>
       </header>

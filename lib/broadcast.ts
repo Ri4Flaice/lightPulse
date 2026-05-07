@@ -7,7 +7,12 @@ export type BroadcastState = {
   playing: boolean;
   version: number;
   ts: number;
+  /** Server-time (Date.now()) at which clients should begin the morse loop. Only set on play. */
+  startAt?: number;
 };
+
+/** Lead time added to startAt so all clients have time to receive the event before firing. */
+const SCHEDULE_LEAD_MS = 800;
 
 const DEFAULT_STATE: BroadcastState = { playing: false, version: 0, ts: 0 };
 
@@ -38,10 +43,13 @@ export async function toggleBroadcast(): Promise<BroadcastState> {
   const r = getRedis();
   if (!r) throw new Error("Хранилище не настроено");
   const current = await getBroadcastState();
+  const now = Date.now();
+  const turningOn = !current.playing;
   const next: BroadcastState = {
-    playing: !current.playing,
+    playing: turningOn,
     version: current.version + 1,
-    ts: Date.now(),
+    ts: now,
+    ...(turningOn ? { startAt: now + SCHEDULE_LEAD_MS } : {}),
   };
   await r.set(STATE_KEY, JSON.stringify(next));
 

@@ -137,6 +137,11 @@
   margin-bottom: 52px;
 }
 
+.hero-right {
+  width: 100%;
+  display: flex; flex-direction: column; align-items: center; gap: 32px;
+}
+
 .hero-seq {
   margin-top: 40px;
   display: flex; flex-direction: column; align-items: center; gap: 14px;
@@ -223,7 +228,6 @@
   .hero h1 { max-width: 14ch; }
   .hero-meta { margin-bottom: 24px; }
   .hero-sub { margin-bottom: 36px; max-width: 460px; text-align: left; }
-  .hero-right { display: flex; flex-direction: column; align-items: center; gap: 32px; }
   .launch { width: 320px; }
   .hero-seq { margin-top: 0; max-width: 480px; }
   .status-bar { width: 100%; }
