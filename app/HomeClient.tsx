@@ -15,7 +15,7 @@ type Props = { initialConfig: Config };
 let toastIdCounter = 0;
 
 export default function HomeClient({ initialConfig }: Props) {
-  const cfg = initialConfig;
+  const [cfg, setCfg] = useState<Config>(initialConfig);
 
   const [torch, setTorch] = useState<TorchSupport & { acquired?: boolean; denied?: boolean }>({
     ok: false,
@@ -293,11 +293,16 @@ export default function HomeClient({ initialConfig }: Props) {
       es = new EventSource("/api/broadcast/stream");
       es.onmessage = (ev) => {
         try {
-          const data = JSON.parse(ev.data) as {
-            playing: boolean;
-            version: number;
-            startAt?: number;
-          };
+          const msg = JSON.parse(ev.data) as
+            | { type: "broadcast"; payload: { playing: boolean; version: number; startAt?: number } }
+            | { type: "config"; payload: Config }
+            | { type: "ping" };
+          if (msg.type === "config") {
+            setCfg(msg.payload);
+            return;
+          }
+          if (msg.type !== "broadcast") return;
+          const data = msg.payload;
           if (typeof data.version !== "number" || data.version <= lastVersion) return;
           lastVersion = data.version;
           if (data.playing && !activeRef.current) {

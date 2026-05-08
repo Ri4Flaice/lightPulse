@@ -194,7 +194,7 @@ function pickMethodOrder(ua: string): TorchMethod[] {
 
 // ── Method probing ─────────────────────────────────────────────────────────
 
-// Safari/iOS does not expose `settings.torch` even when the LED is physically on,
+// Safari/iOS reports `settings.torch=false` even when the LED is physically on,
 // so we trust `capabilities.torch === true` plus a non-throwing applyConstraints
 // as proof the implementation accepted the constraint.
 function isMethodSuccess(
@@ -202,7 +202,7 @@ function isMethodSuccess(
   capsTorchSupported: boolean
 ): boolean {
   if (settingsTorchAfter === true) return true;
-  if (capsTorchSupported && settingsTorchAfter !== false) return true;
+  if (capsTorchSupported) return true;
   return false;
 }
 

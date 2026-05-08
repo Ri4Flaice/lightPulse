@@ -2,6 +2,7 @@ import { getRedis, getRedisPublisher } from "./redis";
 
 const STATE_KEY = "broadcast:state";
 export const BROADCAST_CHANNEL = "broadcast:events";
+export const CONFIG_CHANNEL = "config:events";
 
 export type BroadcastState = {
   playing: boolean;

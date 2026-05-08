@@ -1,9 +1,16 @@
 import {
   BROADCAST_CHANNEL,
+  CONFIG_CHANNEL,
   getBroadcastState,
   type BroadcastState,
 } from "@/lib/broadcast";
+import { readConfig, type Config } from "@/lib/config";
 import { createRedisSubscriber } from "@/lib/redis";
+
+type StreamEvent =
+  | { type: "broadcast"; payload: BroadcastState }
+  | { type: "config"; payload: Config }
+  | { type: "ping" };
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -26,7 +33,7 @@ export async function GET(req: Request) {
         clearTimeout(ttlTimer);
         clearInterval(keepaliveTimer);
         try {
-          subscriber?.unsubscribe(BROADCAST_CHANNEL).catch(() => {});
+          subscriber?.unsubscribe(BROADCAST_CHANNEL, CONFIG_CHANNEL).catch(() => {});
           subscriber?.quit().catch(() => {});
         } catch {
           /* ignore */
@@ -38,7 +45,7 @@ export async function GET(req: Request) {
         }
       };
 
-      const send = (data: BroadcastState | { type: "ping" }) => {
+      const send = (data: StreamEvent) => {
         if (closed) return;
         try {
           controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
@@ -57,26 +64,32 @@ export async function GET(req: Request) {
         }
       }, KEEPALIVE_MS);
 
-      // Send current state immediately
+      // Send current state + config immediately
       try {
-        const initial = await getBroadcastState();
-        send(initial);
+        const [initialState, initialConfig] = await Promise.all([
+          getBroadcastState(),
+          readConfig(),
+        ]);
+        send({ type: "broadcast", payload: initialState });
+        send({ type: "config", payload: initialConfig });
       } catch {
         /* ignore */
       }
 
       if (subscriber) {
         subscriber.on("message", (channel, message) => {
-          if (channel !== BROADCAST_CHANNEL) return;
           try {
-            const parsed = JSON.parse(message) as BroadcastState;
-            send(parsed);
+            if (channel === BROADCAST_CHANNEL) {
+              send({ type: "broadcast", payload: JSON.parse(message) as BroadcastState });
+            } else if (channel === CONFIG_CHANNEL) {
+              send({ type: "config", payload: JSON.parse(message) as Config });
+            }
           } catch {
             /* ignore malformed message */
           }
         });
         try {
-          await subscriber.subscribe(BROADCAST_CHANNEL);
+          await subscriber.subscribe(BROADCAST_CHANNEL, CONFIG_CHANNEL);
         } catch (e) {
           console.error("[/api/broadcast/stream] subscribe failed:", e);
           close();

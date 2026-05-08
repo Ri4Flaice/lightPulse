@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { readConfig, writeConfig } from "@/lib/config";
 import { isAuthed } from "@/lib/auth";
+import { CONFIG_CHANNEL } from "@/lib/broadcast";
+import { getRedisPublisher } from "@/lib/redis";
 import { ZodError } from "zod";
 
 export const dynamic = "force-dynamic";
@@ -22,6 +24,14 @@ export async function POST(req: Request) {
   }
   try {
     const saved = await writeConfig(body);
+    const pub = getRedisPublisher();
+    if (pub) {
+      try {
+        await pub.publish(CONFIG_CHANNEL, JSON.stringify(saved));
+      } catch (e) {
+        console.error("[/api/config] publish failed:", e);
+      }
+    }
     return NextResponse.json(saved);
   } catch (e) {
     if (e instanceof ZodError) {
