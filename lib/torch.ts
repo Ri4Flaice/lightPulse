@@ -1,15 +1,22 @@
 export type TorchSupport = { ok: boolean; reason: string };
 
+export function isIOS(): boolean {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent;
+  if (/iPhone|iPad|iPod/i.test(ua)) return true;
+  // iPadOS 13+ Safari spoofs UA as macOS — distinguish by touch points
+  return /Macintosh/i.test(ua) && navigator.maxTouchPoints > 1;
+}
+
 export function detectTorchSupport(): TorchSupport {
   if (typeof navigator === "undefined") return { ok: false, reason: "SSR" };
   if (typeof window !== "undefined" && window.isSecureContext === false) {
     return { ok: false, reason: "Требуется HTTPS — экранный режим" };
   }
   if (!navigator.mediaDevices?.getUserMedia) return { ok: false, reason: "Нет доступа к камере" };
-  if (/iPhone|iPad|iPod/i.test(navigator.userAgent)) {
-    return { ok: false, reason: "iOS — экранный режим" };
+  if (!isIOS() && navigator.maxTouchPoints === 0) {
+    return { ok: false, reason: "Десктоп — экранный режим" };
   }
-  if (navigator.maxTouchPoints === 0) return { ok: false, reason: "Десктоп — экранный режим" };
   return { ok: true, reason: "Проверка фонарика…" };
 }
 
@@ -168,6 +175,11 @@ async function gatherSecurityInfo(): Promise<SecurityInfo> {
 // ── UA-based method ordering ───────────────────────────────────────────────
 
 function pickMethodOrder(ua: string): TorchMethod[] {
+  // Safari/iOS supports only advanced applyConstraints; ImageCapture, flat torch
+  // and gumTorch are not implemented in WebKit.
+  if (/iPhone|iPad|iPod/i.test(ua) || (/Macintosh/i.test(ua) && /Mobile|Touch/i.test(ua))) {
+    return ["applyConstraints", "applyConstraintsRetry"];
+  }
   if (/SamsungBrowser\//i.test(ua)) {
     return ["applyConstraintsFlat", "applyConstraints", "applyConstraintsRetry", "imageCapture"];
   }

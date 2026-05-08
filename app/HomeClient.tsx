@@ -6,7 +6,7 @@ import MorseGlyphs from "@/components/MorseGlyphs";
 import MorseTimeline from "@/components/MorseTimeline";
 import ToastList, { type ToastData } from "@/components/Toast";
 import { morseToTimeline } from "@/lib/morse";
-import { detectTorchSupport, TorchController, TorchError, type TorchSupport } from "@/lib/torch";
+import { detectTorchSupport, isIOS, TorchController, TorchError, type TorchSupport } from "@/lib/torch";
 import { sendTorchLog } from "@/lib/torchLogClient";
 import type { Config } from "@/lib/config";
 
@@ -57,6 +57,16 @@ export default function HomeClient({ initialConfig }: Props) {
     const ctrl = new TorchController();
     torchRef.current = ctrl;
     let cancelled = false;
+
+    // iOS Safari requires a user gesture for getUserMedia — defer acquire to button click
+    if (isIOS()) {
+      setTorch({ ok: true, reason: "Готов · нажмите для запуска", acquired: false });
+      return () => {
+        cancelled = true;
+        ctrl.release();
+        torchRef.current = null;
+      };
+    }
 
     acquirePromiseRef.current = ctrl
       .acquire()
@@ -130,6 +140,30 @@ export default function HomeClient({ initialConfig }: Props) {
           useTorch = await acquirePromiseRef.current;
           if (!useTorch) {
             addToast("Фонарик недоступен — включён экранный режим", "info");
+          }
+        } else if (torch.ok && torchRef.current && !torchRef.current.acquired) {
+          // iOS path: acquire runs inside the user-gesture click handler
+          const ctrl = torchRef.current;
+          try {
+            await ctrl.acquire();
+            setTorch({ ok: true, reason: "Фонарик готов", acquired: true });
+            useTorch = true;
+            sendTorchLog(ctrl.diagnostics).catch(() => {});
+          } catch (err) {
+            useTorch = false;
+            const denied = err instanceof TorchError && err.code === "PERMISSION_DENIED";
+            setTorch({
+              ok: false,
+              reason: denied ? "Доступ отклонён · экранный режим" : "Экранный режим",
+              denied,
+            });
+            addToast(
+              denied
+                ? "Доступ к камере отклонён — экранный режим"
+                : "Фонарик недоступен — экранный режим",
+              denied ? "info" : "error"
+            );
+            if (err instanceof TorchError) sendTorchLog(err.diagnostics).catch(() => {});
           }
         } else if (torch.ok && !torchRef.current) {
           const ctrl = new TorchController();
