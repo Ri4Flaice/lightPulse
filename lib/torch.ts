@@ -194,13 +194,29 @@ function pickMethodOrder(ua: string): TorchMethod[] {
 
 // ── Method probing ─────────────────────────────────────────────────────────
 
-async function tryMethod(track: MediaStreamTrack, method: TorchMethod): Promise<MethodResult> {
+// Safari/iOS does not expose `settings.torch` even when the LED is physically on,
+// so we trust `capabilities.torch === true` plus a non-throwing applyConstraints
+// as proof the implementation accepted the constraint.
+function isMethodSuccess(
+  settingsTorchAfter: boolean | "undefined",
+  capsTorchSupported: boolean
+): boolean {
+  if (settingsTorchAfter === true) return true;
+  if (capsTorchSupported && settingsTorchAfter !== false) return true;
+  return false;
+}
+
+async function tryMethod(
+  track: MediaStreamTrack,
+  method: TorchMethod,
+  capsTorchSupported: boolean
+): Promise<MethodResult> {
   try {
     if (method === "applyConstraints") {
       await track.applyConstraints({ advanced: [{ torch: true } as TorchConstraints] });
       await new Promise<void>((r) => setTimeout(r, 80));
       const settingsTorchAfter = readSettingsTorch(track);
-      return { method, ok: settingsTorchAfter === true, settingsTorchAfter };
+      return { method, ok: isMethodSuccess(settingsTorchAfter, capsTorchSupported), settingsTorchAfter };
     }
 
     if (method === "applyConstraintsFlat") {
@@ -208,7 +224,7 @@ async function tryMethod(track: MediaStreamTrack, method: TorchMethod): Promise<
       await (track.applyConstraints as (c: any) => Promise<void>)({ torch: true });
       await new Promise<void>((r) => setTimeout(r, 80));
       const settingsTorchAfter = readSettingsTorch(track);
-      return { method, ok: settingsTorchAfter === true, settingsTorchAfter };
+      return { method, ok: isMethodSuccess(settingsTorchAfter, capsTorchSupported), settingsTorchAfter };
     }
 
     if (method === "applyConstraintsRetry") {
@@ -235,7 +251,7 @@ async function tryMethod(track: MediaStreamTrack, method: TorchMethod): Promise<
       await track.applyConstraints({ advanced: [{ torch: true } as TorchConstraints] });
       await new Promise<void>((r) => setTimeout(r, 150));
       const settingsTorchAfter = readSettingsTorch(track);
-      return { method, ok: settingsTorchAfter === true, settingsTorchAfter };
+      return { method, ok: isMethodSuccess(settingsTorchAfter, capsTorchSupported), settingsTorchAfter };
     }
 
     if (method === "imageCapture") {
@@ -247,7 +263,7 @@ async function tryMethod(track: MediaStreamTrack, method: TorchMethod): Promise<
       await ic.setOptions({ torch: true });
       await new Promise<void>((r) => setTimeout(r, 250));
       const settingsTorchAfter = readSettingsTorch(track);
-      return { method, ok: settingsTorchAfter === true, settingsTorchAfter };
+      return { method, ok: isMethodSuccess(settingsTorchAfter, capsTorchSupported), settingsTorchAfter };
     }
 
     return { method, ok: false, errorName: "UnknownMethod" };
@@ -285,12 +301,13 @@ async function setTrackTorch(track: MediaStreamTrack, method: TorchMethod, on: b
 
 async function probeTrack(
   track: MediaStreamTrack,
-  order: TorchMethod[]
+  order: TorchMethod[],
+  capsTorchSupported: boolean
 ): Promise<{ winning: TorchMethod | null; results: MethodResult[] }> {
   const results: MethodResult[] = [];
   for (const method of order) {
     if (method === "gumTorch") continue; // gumTorch is a getUserMedia strategy, handled separately
-    const r = await tryMethod(track, method);
+    const r = await tryMethod(track, method, capsTorchSupported);
     results.push(r);
     if (r.ok) {
       return { winning: method, results };
@@ -530,6 +547,7 @@ export class TorchController {
       await preview.ready;
       const settingsTorchAfter = readSettingsTorch(track);
       const caps = (track.getCapabilities?.() ?? {}) as TorchCapabilities;
+      const ok = isMethodSuccess(settingsTorchAfter, caps.torch === true);
       diag.attempts.push({
         cameraLabel: track.label,
         cameraId: track.getSettings().deviceId ?? "",
@@ -537,9 +555,9 @@ export class TorchController {
         capabilitiesTorch: typeof caps.torch === "boolean" ? caps.torch : "undefined",
         capabilitiesJson: safeJson(caps),
         settingsJson: safeJson(track.getSettings()),
-        methods: [{ method: "gumTorch", ok: settingsTorchAfter === true, settingsTorchAfter }],
+        methods: [{ method: "gumTorch", ok, settingsTorchAfter }],
       });
-      if (settingsTorchAfter === true) {
+      if (ok) {
         this.stream = stream;
         this.track = track;
         this.method = "gumTorch";
@@ -588,7 +606,7 @@ export class TorchController {
     await preview.ready;
 
     const caps = (track.getCapabilities?.() ?? {}) as TorchCapabilities;
-    const probe = await probeTrack(track, order);
+    const probe = await probeTrack(track, order, caps.torch === true);
 
     diag.attempts.push({
       cameraLabel: track.label,
