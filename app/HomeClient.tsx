@@ -192,10 +192,24 @@ export default function HomeClient({ initialConfig }: Props) {
       const localAnchor =
         typeof serverStartAt === "number" ? serverStartAt - offset : Date.now();
 
+      const totalDur = timeline.reduce((s, t) => s + t.dur, 0);
       let i = 0;
       let onIdx = -1;
       // `nextAt` is the local-clock target for the *current* step's transition.
       let nextAt = localAnchor;
+
+      // Late-joiner sync: if anchor is in the past (broadcast already running),
+      // find the current position in the loop instead of replaying from step 0
+      // at zero-delay (which causes hyper-fast flashing).
+      if (totalDur > 0 && localAnchor < Date.now()) {
+        const elapsed = (Date.now() - localAnchor) % totalDur;
+        let walked = 0;
+        while (i < timeline.length && walked + timeline[i].dur <= elapsed) {
+          walked += timeline[i].dur;
+          i++;
+        }
+        nextAt = Date.now() - (elapsed - walked);
+      }
 
       const tick = () => {
         if (i >= timeline.length) {
