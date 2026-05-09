@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Logo from "@/components/Logo";
-import MorseGlyphs from "@/components/MorseGlyphs";
 import ToastList, { type ToastData } from "@/components/Toast";
 import { morseToTimeline } from "@/lib/morse";
 import { detectTorchSupport, isIOS, TorchController, TorchError, type TorchSupport } from "@/lib/torch";
@@ -21,7 +20,6 @@ export default function HomeClient({ initialConfig }: Props) {
     reason: "...",
   });
   const [active, setActive] = useState(false);
-  const [stepIdx, setStepIdx] = useState(-1);
   const [flashOn, setFlashOn] = useState(false);
   const [mode, setMode] = useState<"torch" | "screen" | "—">("—");
   const [loading, setLoading] = useState(false);
@@ -115,7 +113,6 @@ export default function HomeClient({ initialConfig }: Props) {
   const stop = useCallback(() => {
     setActive(false);
     setFlashOn(false);
-    setStepIdx(-1);
     if (timerRef.current) {
       clearTimeout(timerRef.current);
       timerRef.current = null;
@@ -208,7 +205,6 @@ export default function HomeClient({ initialConfig }: Props) {
         const step = timeline[i];
         if (step.type === "on") {
           onIdx++;
-          setStepIdx(onIdx);
           setFlashOn(true);
           if (useTorch) torchRef.current?.setOn(true);
         } else {
@@ -337,18 +333,6 @@ export default function HomeClient({ initialConfig }: Props) {
     };
   }, []);
 
-  const torchReady = torch.ok;
-  const statusText =
-    torch.reason === "..."
-      ? "определение…"
-      : torch.denied
-        ? "доступ отклонён · экранный режим"
-        : torchReady
-          ? "фонарик готов"
-          : torch.reason.startsWith("iOS") || torch.reason.startsWith("Десктоп")
-            ? "экранный режим"
-            : torch.reason;
-
   return (
     <div className="home" ref={homeRef}>
       <nav className="nav fade-in" style={{ animationDelay: "50ms" }}>
@@ -356,15 +340,6 @@ export default function HomeClient({ initialConfig }: Props) {
       </nav>
 
       <main className="hero stagger">
-        <div className="hero-meta">
-          <span className="dash" />
-          <b>Сигнал · {cfg.label || "Свой"}</b>
-          <span>·</span>
-          <span>{statusText}</span>
-        </div>
-
-        <h1>Приветствую тебя на Light шоу</h1>
-
         <button
           className={`launch ${active ? "active" : ""} ${loading ? "loading" : ""}`}
           onClick={active ? stop : () => start()}
@@ -406,7 +381,6 @@ export default function HomeClient({ initialConfig }: Props) {
           )}
         </button>
 
-        <MorseGlyphs sequence={cfg.sequence} currentIndex={stepIdx} playing={active} />
       </main>
 
       <footer className="foot fade-in" style={{ animationDelay: "600ms" }}>
