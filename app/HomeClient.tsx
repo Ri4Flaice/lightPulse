@@ -35,6 +35,9 @@ export default function HomeClient({ initialConfig }: Props) {
     () => morseToTimeline(cfg.sequence, cfg),
     [cfg.sequence, cfg.dotDuration, cfg.dashDuration, cfg.symbolPause, cfg.wordPause]
   );
+  // Ref so the running tick loop always reads the latest timeline without restart
+  const timelineRef = useRef(timeline);
+  useEffect(() => { timelineRef.current = timeline; }, [timeline]);
 
   const addToast = useCallback((message: string, type: ToastData["type"]) => {
     const id = ++toastIdCounter;
@@ -212,11 +215,13 @@ export default function HomeClient({ initialConfig }: Props) {
       }
 
       const tick = () => {
-        if (i >= timeline.length) {
+        const tl = timelineRef.current;
+        if (i >= tl.length || i < 0) {
           i = 0;
           onIdx = -1;
+          nextAt = Date.now();
         }
-        const step = timeline[i];
+        const step = tl[i];
         if (step.type === "on") {
           onIdx++;
           setFlashOn(true);
