@@ -59,7 +59,6 @@ const OUTCOME_COLOR: Record<LogEntry["outcome"], string> = {
 };
 
 function shortUA(ua: string): string {
-  // Extract device + browser hint
   const m =
     ua.match(/\(([^)]+)\)/)?.[1].split(";").map((s) => s.trim()).slice(-2).join(" ") ?? "";
   const browser =
@@ -69,50 +68,71 @@ function shortUA(ua: string): string {
 
 function fmtTime(iso: string): string {
   try {
-    const d = new Date(iso);
-    return d.toLocaleString("ru-RU", { hour12: false });
+    return new Date(iso).toLocaleString("ru-RU", { hour12: false });
   } catch {
     return iso;
   }
 }
 
+const BATCH = 10;
+
 export default function TorchLogPanel() {
-  const [entries, setEntries] = useState<LogEntry[] | null>(null);
+  const [entries, setEntries] = useState<LogEntry[]>([]);
+  const [limit, setLimit] = useState(BATCH);
+  const [hasMore, setHasMore] = useState(false);
+  const [totalShown, setTotalShown] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const fetchEntries = useCallback(async (fetchLimit: number, append: boolean) => {
+    append ? setLoadingMore(true) : setLoading(true);
     setErr(null);
     try {
-      const res = await fetch("/api/torch-log?limit=200", { cache: "no-store" });
-      if (!res.ok) {
-        setErr(`Ошибка ${res.status}`);
-        return;
-      }
+      // Fetch one extra to detect if more exist
+      const res = await fetch(`/api/torch-log?limit=${fetchLimit + 1}`, { cache: "no-store" });
+      if (!res.ok) { setErr(`Ошибка ${res.status}`); return; }
       const j = (await res.json()) as { entries: LogEntry[] };
-      setEntries(j.entries);
+      const got = j.entries.slice(0, fetchLimit);
+      setHasMore(j.entries.length > fetchLimit);
+      setEntries(got);
+      setTotalShown(got.length);
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Network error");
     } finally {
       setLoading(false);
+      setLoadingMore(false);
     }
   }, []);
+
+  const refresh = useCallback(() => {
+    setLimit(BATCH);
+    fetchEntries(BATCH, false);
+  }, [fetchEntries]);
+
+  const loadMore = useCallback(() => {
+    const next = limit + BATCH;
+    setLimit(next);
+    fetchEntries(next, true);
+  }, [limit, fetchEntries]);
 
   const clear = useCallback(async () => {
     if (!confirm("Очистить весь журнал фонарика?")) return;
     setLoading(true);
     try {
       await fetch("/api/torch-log", { method: "DELETE" });
-      await load();
+      setEntries([]);
+      setHasMore(false);
+      setLimit(BATCH);
+      setTotalShown(0);
     } finally {
       setLoading(false);
     }
-  }, [load]);
+  }, []);
 
   useEffect(() => {
-    load();
-  }, [load]);
+    fetchEntries(BATCH, false);
+  }, [fetchEntries]);
 
   return (
     <section className="panel">
@@ -120,11 +140,11 @@ export default function TorchLogPanel() {
         <h3>
           <span className="num">05</span> Журнал фонарика
         </h3>
-        <span className="tag-mono">{entries ? `${entries.length} записей` : "—"}</span>
+        <span className="tag-mono">{totalShown > 0 ? `${totalShown} записей` : "—"}</span>
       </header>
       <div className="panel-body">
         <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
-          <button className="btn" onClick={load} disabled={loading}>
+          <button className="btn" onClick={refresh} disabled={loading}>
             {loading ? "Загрузка…" : "↻ Обновить"}
           </button>
           <a
@@ -138,7 +158,7 @@ export default function TorchLogPanel() {
           <button
             className="btn"
             onClick={clear}
-            disabled={loading || !entries?.length}
+            disabled={loading || entries.length === 0}
             style={{ marginLeft: "auto" }}
           >
             Очистить
@@ -149,11 +169,11 @@ export default function TorchLogPanel() {
           <p style={{ fontSize: 12, color: "var(--danger)", marginBottom: 10 }}>{err}</p>
         )}
 
-        {entries && entries.length === 0 && !err && (
+        {!loading && entries.length === 0 && !err && (
           <p style={{ fontSize: 12, color: "var(--ink-dim)" }}>Записей нет.</p>
         )}
 
-        {entries && entries.length > 0 && (
+        {entries.length > 0 && (
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             {entries.map((e, i) => (
               <details
@@ -163,68 +183,75 @@ export default function TorchLogPanel() {
                   borderRadius: 6,
                   padding: "8px 10px",
                   background: "rgba(255,255,255,0.02)",
+                  minWidth: 0,
+                  overflow: "hidden",
                 }}
               >
-                <summary
-                  style={{
-                    cursor: "pointer",
+                <summary style={{ cursor: "pointer", listStyle: "none", minWidth: 0 }}>
+                  {/* Строка 1: индикатор + время + исход + метод */}
+                  <div style={{
                     display: "flex",
-                    gap: 10,
                     alignItems: "center",
-                    flexWrap: "wrap",
+                    gap: 8,
                     fontSize: 12,
                     fontFamily: "var(--font-mono)",
-                  }}
-                >
-                  <span
-                    style={{
-                      display: "inline-block",
-                      width: 8,
-                      height: 8,
-                      borderRadius: 4,
+                    flexWrap: "wrap",
+                    minWidth: 0,
+                  }}>
+                    <span style={{
+                      width: 8, height: 8, borderRadius: 4,
                       background: OUTCOME_COLOR[e.outcome],
                       flexShrink: 0,
-                    }}
-                  />
-                  <span style={{ color: "var(--ink-dim)", minWidth: 140 }}>
-                    {fmtTime(e.serverTs)}
-                  </span>
-                  <span
-                    style={{
-                      color: OUTCOME_COLOR[e.outcome],
-                      fontWeight: 600,
-                      minWidth: 90,
-                    }}
-                  >
-                    {OUTCOME_LABEL[e.outcome]}
-                  </span>
-                  <span style={{ color: "var(--ink)" }}>
-                    {e.successMethod ?? e.topLevelErrorName ?? "—"}
-                  </span>
-                  <span style={{ color: "var(--ink-dim)", flex: 1, minWidth: 0 }}>
-                    {shortUA(e.userAgent)}
-                  </span>
-                  <span style={{ color: "var(--ink-dim)" }}>{e.durationMs}мс</span>
+                    }} />
+                    <span style={{ color: "var(--ink-dim)", flexShrink: 0 }}>
+                      {fmtTime(e.serverTs)}
+                    </span>
+                    <span style={{ color: OUTCOME_COLOR[e.outcome], fontWeight: 600, flexShrink: 0 }}>
+                      {OUTCOME_LABEL[e.outcome]}
+                    </span>
+                    <span style={{ color: "var(--ink)", flexShrink: 0 }}>
+                      {e.successMethod ?? e.topLevelErrorName ?? "—"}
+                    </span>
+                  </div>
+                  {/* Строка 2: UA (обрезается) + длительность */}
+                  <div style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    fontSize: 11,
+                    fontFamily: "var(--font-mono)",
+                    marginTop: 3,
+                    minWidth: 0,
+                  }}>
+                    <span style={{
+                      color: "var(--ink-dim)",
+                      flex: 1,
+                      minWidth: 0,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}>
+                      {shortUA(e.userAgent)}
+                    </span>
+                    <span style={{ color: "var(--ink-dim)", flexShrink: 0 }}>{e.durationMs}мс</span>
+                  </div>
                 </summary>
+
                 <div style={{ marginTop: 10, fontSize: 11, fontFamily: "var(--font-mono)" }}>
-                  <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "4px 12px", marginBottom: 10 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "4px 12px", marginBottom: 10, minWidth: 0 }}>
                     <span style={{ color: "var(--ink-dim)" }}>UA:</span>
                     <span style={{ wordBreak: "break-all" }}>{e.userAgent}</span>
                     <span style={{ color: "var(--ink-dim)" }}>Platform:</span>
                     <span>{e.platform}</span>
                     <span style={{ color: "var(--ink-dim)" }}>Secure:</span>
-                    <span>
-                      {String(e.security.isSecureContext)} · {e.security.protocol}
-                    </span>
+                    <span>{String(e.security.isSecureContext)} · {e.security.protocol}</span>
                     <span style={{ color: "var(--ink-dim)" }}>Permissions:</span>
-                    <span>
+                    <span style={{ wordBreak: "break-all" }}>
                       api={e.security.permissionsApiState} · policy=
                       {String(e.security.permissionsPolicyCamera)} · iframe={String(e.security.inIframe)}
                     </span>
                     <span style={{ color: "var(--ink-dim)" }}>Display:</span>
-                    <span>
-                      {e.security.displayMode} · {e.security.visibilityState}
-                    </span>
+                    <span>{e.security.displayMode} · {e.security.visibilityState}</span>
                     <span style={{ color: "var(--ink-dim)" }}>ImageCapture:</span>
                     <span>{String(e.hasImageCapture)}</span>
                     <span style={{ color: "var(--ink-dim)" }}>IP hash:</span>
@@ -232,7 +259,7 @@ export default function TorchLogPanel() {
                     {e.topLevelErrorName && (
                       <>
                         <span style={{ color: "var(--ink-dim)" }}>Top error:</span>
-                        <span>
+                        <span style={{ wordBreak: "break-all" }}>
                           {e.topLevelErrorName}
                           {e.topLevelErrorMessage ? ` — ${e.topLevelErrorMessage}` : ""}
                         </span>
@@ -243,25 +270,26 @@ export default function TorchLogPanel() {
                   {e.attempts.map((a, ai) => (
                     <div
                       key={ai}
-                      style={{
-                        borderTop: "1px dashed var(--line)",
-                        paddingTop: 8,
-                        marginTop: 8,
-                      }}
+                      style={{ borderTop: "1px dashed var(--line)", paddingTop: 8, marginTop: 8 }}
                     >
-                      <div style={{ color: "var(--ink-dim)", marginBottom: 4 }}>
+                      <div style={{ color: "var(--ink-dim)", marginBottom: 4, wordBreak: "break-word" }}>
                         Камера #{ai + 1}: {a.cameraLabel || "(без названия)"} · facing=
                         {a.facingMode ?? "—"} · caps.torch={String(a.capabilitiesTorch)}
                       </div>
-                      <table style={{ width: "100%", fontSize: 11, borderCollapse: "collapse" }}>
+                      <table style={{ width: "100%", fontSize: 11, borderCollapse: "collapse", tableLayout: "fixed" }}>
+                        <colgroup>
+                          <col style={{ width: 24 }} />
+                          <col style={{ width: "40%" }} />
+                          <col />
+                        </colgroup>
                         <tbody>
                           {a.methods.map((m, mi) => (
                             <tr key={mi}>
-                              <td style={{ padding: "2px 6px", color: m.ok ? "#a6ff3d" : "#ff7a7a" }}>
+                              <td style={{ padding: "2px 4px", color: m.ok ? "#a6ff3d" : "#ff7a7a" }}>
                                 {m.ok ? "✓" : "✗"}
                               </td>
-                              <td style={{ padding: "2px 6px", minWidth: 160 }}>{m.method}</td>
-                              <td style={{ padding: "2px 6px", color: "var(--ink-dim)" }}>
+                              <td style={{ padding: "2px 4px", wordBreak: "break-all" }}>{m.method}</td>
+                              <td style={{ padding: "2px 4px", color: "var(--ink-dim)", wordBreak: "break-all" }}>
                                 {m.errorName ?? ""}
                                 {m.errorMessage ? ` — ${m.errorMessage}` : ""}
                                 {m.settingsTorchAfter !== undefined
@@ -276,7 +304,7 @@ export default function TorchLogPanel() {
                         <summary style={{ cursor: "pointer", color: "var(--ink-dim)" }}>
                           capabilities / settings JSON
                         </summary>
-                        <pre style={{ fontSize: 10, whiteSpace: "pre-wrap", wordBreak: "break-all", margin: "4px 0" }}>
+                        <pre style={{ fontSize: 10, whiteSpace: "pre-wrap", wordBreak: "break-all", margin: "4px 0", overflowX: "hidden" }}>
                           caps: {a.capabilitiesJson}
                           {"\n"}settings: {a.settingsJson}
                         </pre>
@@ -286,6 +314,17 @@ export default function TorchLogPanel() {
                 </div>
               </details>
             ))}
+
+            {hasMore && (
+              <button
+                className="btn"
+                onClick={loadMore}
+                disabled={loadingMore}
+                style={{ marginTop: 4, width: "100%" }}
+              >
+                {loadingMore ? "Загрузка…" : `Загрузить ещё ${BATCH}`}
+              </button>
+            )}
           </div>
         )}
       </div>
